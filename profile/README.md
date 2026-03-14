@@ -6,10 +6,10 @@ Jota is not just a chatbot; it's a **distributed brain**. Built with a microserv
 ### 🏗️ Ecosystem Architecture
 | Service | Language | Role | Status |
 | :--- | :--- | :--- | :--- |
-| **[Orchestrator](./jota-orchestrator)** | Python | Logic, Tool Use & Routing | `Pre-Alpha` |
-| **[Inference](./jota-inference)** | C++ | Local LLM Execution (llama.cpp) | `In-Dev` |
-| **[Transcriber](./jota-transcriber)** | C++ | Real-time Whisper Transcription | `Functional` |
-| **[Database](./jota-db)** | Python | Persistence, Memory & Auth | `Functional` |
+| **[Orchestrator](https://github.com/jota-project/jota-orchestrator)** | Python | Logic, Tool Use & Routing | `Pre-Alpha` |
+| **[Inference](https://github.com/jota-project/jota-inference)** | C++ | Local LLM Execution (llama.cpp) | `In-Dev` |
+| **[Transcriber](https://github.com/jota-project/jota-transcriber)** | C++ | Real-time Whisper Transcription | `Functional` |
+| **[Database](https://github.com/jota-project/jota-db)** | Python | Persistence, Memory & Auth | `Functional` |
 
 ### 🌟 Key Features
 * **Performance First:** Core heavy-lifting (Inference/Audio) written in C++.
