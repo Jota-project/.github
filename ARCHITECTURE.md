@@ -8,6 +8,8 @@
 
 Jota es un asistente de voz distribuido. Un cliente físico (ESP32, app, web) habla con un único punto de entrada (gateway), que orquesta varios microservicios especializados.
 
+> **Sistema single-user, multi-device.** Jota está diseñado para un único propietario con múltiples dispositivos cliente (altavoz del salón, cocina, habitación, jardín, etc.). Los "clientes" son dispositivos, no usuarios independientes. Toda la identidad y configuración pertenece al mismo dueño.
+
 ### Mapa de servicios
 
 ```
@@ -160,7 +162,87 @@ Acepta `POST /api/quick` con NDJSON streaming. Lee `x-client-key` y `x-client-id
 
 ---
 
-## 7. Issues abiertas
+## 7. ServiceConfig — Configuración centralizada de servicios
+
+Cada microservicio tiene parámetros de operación propios que hoy viven en variables de entorno. El objetivo es centralizar esta configuración en jota-db para permitir modificación en caliente y administración unificada.
+
+### Tabla `service_config`
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `service` | TEXT | Servicio al que pertenece (`transcriber`, `orchestrator`, `speaker`, `gateway`, `inference`) |
+| `key` | TEXT | Nombre del parámetro, ej. `model`, `audio.chunk_ms` |
+| `value` | JSON | Valor de cualquier tipo |
+| `description` | TEXT | Descripción legible |
+
+`PRIMARY KEY (service, key)`
+
+**Seeding desde `.env`:** al arrancar jota-db, si la tabla está vacía se puebla desde variables de entorno. El `.env` sigue siendo la fuente de bootstrap; la DB actúa como override persistente una vez estable.
+
+### Endpoints admin (jota-db)
+
+| Método | Endpoint | Descripción |
+|---|---|---|
+| `GET` | `/admin/config` | Listar toda la configuración |
+| `GET` | `/admin/config/{service}` | Config de un servicio |
+| `PUT` | `/admin/config/{service}/{key}` | Crear o actualizar valor |
+| `POST` | `/admin/config/{service}/reset` | Restaurar defaults desde `.env` |
+
+Expuestos en gateway como `/api/admin/config/*`.
+
+---
+
+## 8. InferenceProvider — Soporte multi-provider de IA
+
+El sistema soporta múltiples backends de inferencia: el motor local (jota-inference/llama.cpp), APIs externas (OpenAI, Anthropic) y servidores custom (VPS del usuario). Los providers disponibles son configuración del sistema (del propietario), no por dispositivo.
+
+### Tabla `inference_provider`
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `id` | UUID | Identificador |
+| `name` | TEXT | Nombre display, ej. "OpenAI GPT-4o" |
+| `type` | TEXT | `local` \| `openai` \| `anthropic` \| `custom` |
+| `base_url` | TEXT? | URL base (requerida para `local` y `custom`) |
+| `api_key` | TEXT? | API key (para `openai` y `anthropic`) |
+| `default_model_id` | TEXT? | Modelo por defecto del provider |
+| `is_active` | BOOL | Si está disponible para uso |
+| `extra_config` | JSON? | Config adicional específica del provider |
+
+### Selección de provider
+
+El orchestrator lee `orchestrator.default_provider_id` de ServiceConfig. La selección por request sigue este orden:
+1. `ClientConfig.preferred_model_id` — override por dispositivo
+2. `orchestrator.default_provider_id` — default del sistema
+
+### Capa de abstracción en jota-orchestrator
+
+```
+LLMProvider (interfaz)
+├── LocalProvider       → WebSocket a jota-inference (comportamiento actual)
+├── OpenAIProvider      → openai Python SDK
+├── AnthropicProvider   → anthropic Python SDK
+└── CustomHTTPProvider  → endpoint compatible OpenAI en VPS propio
+```
+
+jota-inference permanece sin cambios como backend local.
+
+### Endpoints admin (jota-db)
+
+| Método | Endpoint | Descripción |
+|---|---|---|
+| `GET` | `/admin/providers` | Listar providers |
+| `POST` | `/admin/providers` | Crear provider |
+| `PUT` | `/admin/providers/{id}` | Actualizar (API key, activar/desactivar) |
+| `DELETE` | `/admin/providers/{id}` | Desactivar |
+
+Expuestos en gateway como `/api/admin/providers/*`.
+
+> Spec completa: `docs/superpowers/specs/2026-04-08-serviceconfig-providers-design.md`
+
+---
+
+## 9. Issues abiertas
 
 | Repo | Issue | Descripción | Prioridad |
 |---|---|---|---|
@@ -168,6 +250,10 @@ Acepta `POST /api/quick` con NDJSON streaming. Lee `x-client-key` y `x-client-id
 | `jota-orchestrator` | #15 | Eliminar `GET /models` (proxy redundante) | P3 |
 | `jota-db` | #12 | Revisar/cerrar — ClientConfig ya implementada | P3 |
 | `jota-transcriber` | #27 | Race condition `flushLoop`/`handleEnd` → duplicados `is_final` | P2 |
+| `jota-db` | — | Implementar `ServiceConfig` + seeding desde `.env` | P1 |
+| `jota-db` | — | Implementar `InferenceProvider` + endpoints admin | P1 |
+| `jota-gateway` | — | Proxy endpoints `/api/admin/*` a jota-db | P1 |
+| `jota-orchestrator` | — | Capa `LLMProvider` + lectura de provider desde ServiceConfig | P1 |
 
 ---
 
