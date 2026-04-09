@@ -246,14 +246,15 @@ Expuestos en gateway como `/api/admin/providers/*`.
 
 | Repo | Issue | Descripción | Prioridad |
 |---|---|---|---|
-| `jota-gateway` | #8 | Crear suite de tests y CI | P2 |
+| `jota-db` | PR #15 | ServiceConfig + InferenceProvider + AdminUser + /internal/ + /admin/ | P1 — en revisión |
+| `jota-gateway` | #37 | Proxy `/api/admin/*` a jota-db | P1 |
+| `jota-inference` | #23 | API HTTP compatible OpenAI (`/v1/chat/completions`) | P1 |
+| `jota-orchestrator` | #21 | Capa `LLMProvider` + lectura desde `/internal/` | P1 |
+| `jota-transcriber` | #29 | InternalService + leer ServiceConfig desde `/internal/` | P2 |
+| `jota-speaker` | #1 | InternalService + leer ServiceConfig desde `/internal/` | P2 |
+| `jota-transcriber` | #27 | Race condition `flushLoop`/`handleEnd` → duplicados `is_final` | P2 |
 | `jota-orchestrator` | #15 | Eliminar `GET /models` (proxy redundante) | P3 |
 | `jota-db` | #12 | Revisar/cerrar — ClientConfig ya implementada | P3 |
-| `jota-transcriber` | #27 | Race condition `flushLoop`/`handleEnd` → duplicados `is_final` | P2 |
-| `jota-db` | — | Implementar `ServiceConfig` + seeding desde `.env` | P1 |
-| `jota-db` | — | Implementar `InferenceProvider` + endpoints admin | P1 |
-| `jota-gateway` | — | Proxy endpoints `/api/admin/*` a jota-db | P1 |
-| `jota-orchestrator` | — | Capa `LLMProvider` + lectura de provider desde ServiceConfig | P1 |
 
 ---
 

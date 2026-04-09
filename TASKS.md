@@ -49,13 +49,29 @@ Añade una capa de configuración centralizada en jota-db y soporte para múltip
 - `PUT /admin/providers/{id}` — actualizar
 - `DELETE /admin/providers/{id}` — desactivar (soft delete)
 
-### jota-gateway — Prioridad P1
+### jota-gateway — Prioridad P1 — issue #37
 
 **Tarea 5: Proxy `/api/admin/*`**
-- Añadir cliente HTTP para los nuevos endpoints admin de jota-db
-- Exponer `GET/PUT/DELETE /api/admin/config/{service}/{key}`
-- Exponer `GET/POST/PUT/DELETE /api/admin/providers/{id?}`
-- Auth: `X-API-Key` requerido (igual que resto de API)
+- Extender `DbClient` con métodos admin (config, providers, clients, services)
+- Nuevo router `admin_routes.py` exponiendo `/api/admin/*`
+- Gateway pasa `X-API-Key` directamente a jota-db (que valida si es admin key)
+- No hay cambios en endpoints existentes
+
+### jota-transcriber — Prioridad P2 — issue #29
+
+**Tarea: Adoptar ServiceConfig desde `/internal/`**
+- Registrarse como InternalService (seeding en jota-db)
+- Leer `service-config/transcriber` al arrancar: model, audio params
+- Fallback a `.env` si jota-db no responde
+- `stt_language` y `stt_vad_thold` por sesión siguen viniendo del handshake (ClientConfig)
+
+### jota-speaker — Prioridad P2 — issue #1
+
+**Tarea: Adoptar ServiceConfig desde `/internal/`**
+- Registrarse como InternalService (seeding en jota-db)
+- Leer `service-config/speaker` al arrancar: model, default_voice, default_speed, sample_rate
+- Fallback a `.env` si jota-db no responde
+- `tts_voice` y `tts_speed` por sesión siguen viniendo del handshake (ClientConfig)
 
 ### jota-inference — Prioridad P1 — issue #23
 
