@@ -247,7 +247,7 @@ Expuestos en gateway como `/api/admin/providers/*`.
 | Repo | Issue | Descripción | Prioridad |
 |---|---|---|---|
 | `jota-db` | PR #15 | ServiceConfig + InferenceProvider + AdminUser + /internal/ + /admin/ | P1 — en revisión |
-| `jota-gateway` | #37 | Proxy `/api/admin/*` a jota-db | P1 |
+| `jota-gateway` | #38 | Verificar/actualizar `GET /api/models` para leer de `InferenceProvider` | P2 |
 | `jota-inference` | #23 | API HTTP compatible OpenAI (`/v1/chat/completions`) | P1 |
 | `jota-orchestrator` | #21 | Capa `LLMProvider` + lectura desde `/internal/` | P1 |
 | `jota-transcriber` | #29 | InternalService + leer ServiceConfig desde `/internal/` | P2 |

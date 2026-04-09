@@ -49,13 +49,12 @@ Añade una capa de configuración centralizada en jota-db y soporte para múltip
 - `PUT /admin/providers/{id}` — actualizar
 - `DELETE /admin/providers/{id}` — desactivar (soft delete)
 
-### jota-gateway — Prioridad P1 — issue #37
+### jota-gateway — Prioridad P2 — issue #38
 
-**Tarea 5: Proxy `/api/admin/*`**
-- Extender `DbClient` con métodos admin (config, providers, clients, services)
-- Nuevo router `admin_routes.py` exponiendo `/api/admin/*`
-- Gateway pasa `X-API-Key` directamente a jota-db (que valida si es admin key)
-- No hay cambios en endpoints existentes
+**Tarea: Verificar `GET /api/models` tras merge de jota-db PR #15**
+- Comprobar si el endpoint `/models` de jota-db sigue devolviendo datos correctos desde `InferenceProvider`
+- Si sí: no hay cambios en el gateway
+- Si no: actualizar `DbClient.get_models()` para leer de `/internal/providers` (requiere registrar gateway como InternalService)
 
 ### jota-transcriber — Prioridad P2 — issue #29
 
