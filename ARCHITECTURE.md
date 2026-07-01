@@ -1,69 +1,86 @@
-# Jota — Arquitectura del Sistema
+# Jota — System Architecture
 
-> Última actualización: 2026-04-05
+> Última actualización: 2026-07-01
 
 ---
 
 ## 1. Visión General
 
-Jota es un asistente de voz distribuido. Un cliente físico (ESP32, app, web) habla con un único punto de entrada (gateway), que orquesta varios microservicios especializados.
+Jota es un asistente de voz distribuido. Un cliente físico (ESP32, app, web, Home Assistant, Termux) habla con un único punto de entrada (gateway), que orquesta varios microservicios especializados.
 
 ### Mapa de servicios
 
 ```
-Physical Client (ESP32 / Web / App)
+Physical Client (ESP32 / Web / App / Termux / Home Assistant)
         │  WebSocket  ws://gateway:8004/ws/stream
         │  REST HTTP  http://gateway:8004/api/*
         │  Handshake: { client_key, input_mode, output_mode, ... }
         ▼
   [jota-gateway]  — Python/FastAPI — Puerto 8004
-  BFF completo. Un JotaBridge por sesión de voz.
+  BFF completo. SQLite local para identidad y config.
         │
-        ├──► [jota-orchestrator]  — Python/FastAPI — Puerto 8000
-        │     HTTP POST /api/quick (NDJSON streaming)
-        │     Headers: x-client-key, x-client-id
-        │           │
-        │           ├──► [jota-inference]  — C++/llama.cpp
-        │           │     WebSocket (protocolo JSON propio)
-        │           │
-        │           └──► [jota-db]  — Python/FastAPI/SQLite — Puerto 8001
-        │                 HTTP REST
+        ├──► [OpenClaw]  — orquestador externo open source
+        │     WebSocket (puerto configurable; OpenClaw-managed)
+        │     Token auth (OPENCLAW_TOKEN)
         │
-        ├──► [jota-transcriber]  — C++/whisper.cpp — Puerto 9000
+        ├──► [jota-transcriber]  — C++17/whisper.cpp — Puerto 9000
         │     WebSocket (PCM Float32 in, JSON transcriptions out)
-        │     Handshake: { type: "config", token: <client_key>, language, vad_thold }
+        │     Auth: AUTH_TOKEN estático o AUTH_API_URL externa
         │
-        └──► [jota-speaker]  — Python/FastAPI/Kokoro — Puerto 8005
+        └──► [jota-speaker]  — Python/Kokoro — Puerto 8005
               WebSocket (JSON tokens in, PCM16 audio out)
-              Handshake: { type: "auth", token: <tts_token>, voice, speed }
+              Wyoming TCP 20424 (Home Assistant native TTS)
+              Auth: TTS_TOKEN estático
 ```
+
+### Servicios Alternative (mantenidos por compatibilidad, menos desarrollo)
+
+- `jota-orchestrator` — Orquestador LLM propio (Python/FastAPI, puerto 8000). Usar en su lugar: OpenClaw.
+- `jota-inference` — Motor llama.cpp propio (C++, puerto 3000). Usar en su lugar: `llama.cpp` standalone con OpenClaw.
+
+### Servicios Deprecated
+
+- `jota-db` — Identidad/auth centralizado. El gateway ya tiene SQLite local. Mantenido solo como opción de auth externa para transcriber/speaker en setups legacy.
 
 ---
 
 ## 2. Gateway — API pública
 
-El gateway es el único punto de contacto con el exterior.
+El gateway es el único punto de contacto con el exterior. Implementa cuatro superficies:
 
 ### WebSocket
 
-| Endpoint | Descripción |
-|---|---|
-| `ws://gateway:8004/ws/stream` | Sesión bidireccional de voz (JotaBridge) |
-
-### REST
-
-| Método | Endpoint | Descripción |
+| Endpoint | Auth | Descripción |
 |---|---|---|
-| `GET` | `/api/health` | Estado de todos los microservicios (público) |
-| `GET` | `/api/models` | Modelos disponibles |
-| `GET` | `/api/config` | Configuración del cliente |
-| `PUT` | `/api/config` | Actualizar configuración (patch parcial) |
-| `POST` | `/api/config/reset` | Restaurar configuración a defaults |
-| `GET` | `/api/conversations` | Historial de conversaciones |
-| `GET` | `/api/conversations/{id}/messages` | Mensajes de una conversación |
-| `DELETE` | `/api/conversations/{id}` | Archivar conversación |
+| `ws://gateway:8004/ws/stream` | `client_key` en handshake JSON | Sesión interactiva de voz/texto |
 
-Todos los endpoints REST (excepto `/health`) requieren `X-API-Key` en el header, que se resuelve contra jota-db.
+### Health
+
+| Endpoint | Auth | Descripción |
+|---|---|---|
+| `GET /healthz` | ninguna | Liveness |
+| `GET /ready` | ninguna | Readiness (200 ok/degraded, 503 si OpenClaw no responde) |
+
+### Admin (X-Admin-Token)
+
+| Endpoint | Método | Descripción |
+|---|---|---|
+| `/admin/sessions` | GET | Sesiones activas y recientes |
+| `/admin/sessions/{id}` | GET | Detalle con eventos y latencias |
+| `/admin/orchestrators/{name}/status` | GET | Estado del orquestador (CONNECTED/RECONNECTING/DEGRADED) |
+| `/admin/orchestrators/{name}/reconnect` | POST | Fuerza reconexión |
+| `/admin/clients` | GET/POST | Listar/crear clientes (SQLite local) |
+| `/admin/clients/{id}` | GET/PATCH/DELETE | Detalle/actualizar/borrar |
+| `/admin/clients/{id}/rotate-key` | POST | Rotar `client_key` |
+
+### OpenAI-compatible (LAN-only vía nginx)
+
+| Endpoint | Método | Descripción |
+|---|---|---|
+| `/v1/models` | GET | Lista estática |
+| `/v1/chat/completions` | POST | Chat completion; soporta `stream: true/false` |
+
+Ver [`jota-gateway/README.md`](https://github.com/Jota-project/jota-gateway) para el detalle completo.
 
 ---
 
@@ -73,12 +90,12 @@ Todos los endpoints REST (excepto `/health`) requieren `X-API-Key` en el header,
 Cliente conecta → ws://gateway:8004/ws/stream
   Handshake: { "client_key": "abc123", ... }
 
-  Gateway → GET /auth/session en jota-db
-    { client: { id: "uuid-real", ... }, config: { stt_language: "es", tts_voice: "af_heart", ... } }
+  Gateway → SQLite local (data/gateway.db)
+    SELECT * FROM clients WHERE client_key = 'abc123' AND is_active = 1
+    → { id: "uuid-real", name: "...", stt_language: "es", tts_voice: "ef_dora", ... }
 
-  Gateway → POST /api/quick en orchestrator
-    headers: x-client-key: "abc123", x-client-id: "uuid-real"
-    body: { text: "...", model_id, system_prompt_extra }
+  Gateway → OpenClaw WebSocket
+    Handshake con client_key + client_id
 
   Gateway → Transcriber WS
     Handshake: { type: "config", token: "abc123", language, vad_thold }
@@ -87,65 +104,72 @@ Cliente conecta → ws://gateway:8004/ws/stream
     Handshake: { type: "auth", token: <TTS_TOKEN>, voice, speed }
 ```
 
-Los valores de `language`, `vad_thold`, `voice`, `speed`, `model_id` y `system_prompt_extra` se leen de `ClientConfig` — no son globales.
+Los valores de `language`, `vad_thold`, `voice`, `speed`, etc. se leen de `ClientRecord` (SQLite local) — no son globales.
 
 ---
 
-## 4. ClientConfig
+## 4. ClientConfig / ClientRecord
 
-Almacenada en jota-db. Se carga en el handshake de voz y en cada request REST.
+Almacenada en SQLite local del gateway (`data/gateway.db`). Se carga en el handshake de voz y en cada request autenticado.
 
 | Campo | Default | Usado en |
 |---|---|---|
 | `stt_language` | `"es"` | Handshake del transcriber |
 | `stt_vad_thold` | `0.0` | Handshake del transcriber |
-| `tts_voice` | `"af_heart"` | Handshake del speaker |
+| `tts_voice` | `"af_heart"` | Handshake del speaker (ver §5.3 sobre Wyoming) |
 | `tts_speed` | `1.0` | Handshake del speaker |
-| `preferred_model_id` | `null` | Payload al orchestrator |
-| `system_prompt_extra` | `null` | Payload al orchestrator |
+| `default_agent` | `null` | Override OpenClaw agent |
+| `allowed_agents` | `null` | JSON list — agentes permitidos |
 | `barge_in_enabled` | `true` | Bridge — cancelación de turno |
 | `barge_in_min_chars` | `5` | Bridge — umbral de interrupción |
-| `conversation_memory_limit` | `20` | Orchestrator — ventana de memoria |
-
-Endpoints en jota-db: `GET/PUT /config/me`, `POST /config/me/reset`.
+| `silence_timeout_s` | `2.0` | Bridge — silencio antes de evento |
+| `max_silence_turns` | `3` | Bridge — turnos de silencio antes de cerrar |
+| `push_enabled` | `true` | Si se aceptan push turns iniciados por el agente |
+| `system_prompt_extra` | `null` | Appended al system prompt |
 
 ---
 
 ## 5. Protocolos de los microservicios
 
-### jota-transcriber
+### 5.1 jota-transcriber
 
 **Handshake (gateway → transcriber):**
 ```json
 { "type": "config", "language": "es", "token": "<client_key>", "vad_thold": 0.0 }
 ```
 
-**Respuesta `ready`:**
-```json
-{ "type": "ready", "protocol_version": 1, "session_id": "session-...", "config": { ... } }
-```
-
-**Mensajes del servidor:**
-| Tipo | Cuándo |
-|---|---|
-| `ready` | Tras config válida |
-| `transcription` | Parciales + final (`is_final: true`) |
-| `warning` | Buffer ≥ 20 s (`code: "buffer_full"`) |
-| `error` | Auth fallida, config inválida, etc. |
-
-Fin de sesión: `{"type": "end"}` — dispara transcripción final y cierra.
+**Mensajes del servidor:** `ready`, `transcription` (con `is_final`), `warning` (code `buffer_full`), `error`. Fin de sesión: `{"type":"end"}`.
 
 **Auth del transcriber:**
-- Dev: `AUTH_TOKEN=<token>`
-- Prod: `AUTH_API_URL=http://jota-db:8001/auth` + `AUTH_API_SECRET`. Llama a `GET /auth/client`, caché de 300 s.
+- Default: `AUTH_TOKEN=<token>` estático.
+- Opcional: `AUTH_API_URL=<external URL>` + `AUTH_API_SECRET` para validar contra un backend externo. **Nota:** la opción recomendada hoy es `AUTH_TOKEN` estático; ver [issue abierta](https://github.com/Jota-project/jota-gateway/issues) sobre deprecar el uso de `jota-db` como auth backend.
 
-### jota-speaker
+### 5.2 jota-speaker
 
-Auth vía `POST /auth/validate` en jota-db con `TTS_TOKEN`.
+**WebSocket** (`/ws`):
+```json
+{ "type": "auth", "token": "<TTS_TOKEN>", "voice": "ef_dora", "speed": 1.0 }
+```
 
-### jota-orchestrator
+Audio binario PCM16 24 kHz sale como frames binarios con header `[0xA1][turn_seq uint16 BE]`.
 
-Acepta `POST /api/quick` con NDJSON streaming. Lee `x-client-key` y `x-client-id` del header para identificar al cliente y crear conversaciones con FK válida en jota-db.
+**Wyoming TCP** (puerto 20424, opcional, `JOTA_WYOMING_ENABLED=true`):
+Permite usar `jota-speaker` como TTS nativo de Home Assistant.
+
+### 5.3 OpenClaw
+
+Orquestador LLM externo. El gateway mantiene un `OpenClawClient` singleton envuelto en `ReconnectingOpenClawClient` (estados CONNECTED / RECONNECTING / DEGRADED).
+
+Configuración gateway:
+- `OPENCLAW_HOST`
+- `OPENCLAW_PORT`
+- `OPENCLAW_TOKEN`
+
+Ver docs upstream de OpenClaw para el protocolo detallado.
+
+### 5.4 jota-orchestrator (Alternative)
+
+Aceptaba `POST /api/quick` con NDJSON streaming. Lee `x-client-key` y `x-client-id` del header. **Mantenido por compatibilidad; el camino recomendado es OpenClaw (§5.3).**
 
 ---
 
@@ -155,23 +179,46 @@ Acepta `POST /api/quick` con NDJSON streaming. Lee `x-client-key` y `x-client-id
 
 | Recurso | TTL | Maxsize |
 |---|---|---|
-| `get_session()` (auth REST) | 60 s | 500 |
+| `get_verified_client()` (auth REST) | 60 s | 500 |
 | `get_models()` | 300 s | 1 |
 
 ---
 
-## 7. Issues abiertas
+## 7. Clientes
+
+### jota-voice
+
+Cliente Termux/Android que reemplaza `wyoming-satellite` + HA voice pipeline. Conecta vía WS streaming directo al gateway, reduciendo latencia de ~5-6s a <2s.
+
+Arquitectura local en el dispositivo:
+- `wyoming-openwakeword` (puerto 10401) → wake word detection
+- `jota-voice-client` → WS streaming hacia gateway
+- `jota-display` (puerto 8766) → UI kiosk
+
+Ver [jota-voice/docs/spec.md](https://github.com/Jota-project/jota-voice/blob/main/docs/spec.md) para detalle.
+
+### jota-display
+
+UI kiosk (Vue 3 + SSE) que muestra estado de la conversación y permite controlar Home Assistant. Diseñada para correr en el mismo dispositivo Android que `jota-voice` (o en una Raspberry Pi / tablet separada).
+
+Ver [jota-display/docs/SPEC.md](https://github.com/Jota-project/jota-display/blob/main/docs/SPEC.md) para la hoja de ruta completa.
+
+---
+
+## 8. Issues activas
 
 | Repo | Issue | Descripción | Prioridad |
 |---|---|---|---|
-| `jota-gateway` | #8 | Crear suite de tests y CI | P2 |
-| `jota-orchestrator` | #15 | Eliminar `GET /models` (proxy redundante) | P3 |
-| `jota-db` | #12 | Revisar/cerrar — ClientConfig ya implementada | P3 |
+| `jota-gateway` | #52 | `/v1/*` endpoints expuestos externamente sin auth — conflicto de compat con HA | P1 |
+| `jota-gateway` | #50 | E2E test suite con Docker Compose | P2 |
+| `jota-gateway` | #49 | `DELETE /api/conversations/{id}` — endpoint de archive | P3 |
+| `jota-gateway` | #48 | Cachear `get_verified_client()` para evitar round-trip por request | P2 |
+| `jota-gateway` | (nueva) | Deprecar jota-db como auth backend en transcriber/speaker | P3 |
 | `jota-transcriber` | #27 | Race condition `flushLoop`/`handleEnd` → duplicados `is_final` | P2 |
 
 ---
 
-## 8. Estructura de ficheros clave
+## 9. Estructura de ficheros clave
 
 ### jota-gateway
 
@@ -179,44 +226,63 @@ Acepta `POST /api/quick` con NDJSON streaming. Lee `x-client-key` y `x-client-id
 |---|---|
 | WebSocket BFF + JotaBridge | `src/services/bridge.py` |
 | WS endpoint + handshake | `src/api/routes.py` |
+| OpenClaw client (singleton + reconexión) | `src/services/openclaw_client.py` |
+| DB local (SQLModel) | `src/db/models.py`, `src/db/database.py` |
 | Auth dependency REST | `src/api/deps.py` |
-| REST: config | `src/api/config_routes.py` |
-| REST: conversaciones | `src/api/conversation_routes.py` |
-| REST: modelos | `src/api/models_routes.py` |
-| REST: health | `src/api/health_routes.py` |
-| Cliente jota-db | `src/services/db_client.py` |
-| Cliente orchestrator | `src/services/orchestrator_client.py` |
-| Cliente transcriber | `src/services/transcriber_client.py` |
-| Cliente TTS | `src/services/tts_client.py` |
 | Caché TTL | `src/core/cache.py` |
 
-### jota-orchestrator
+### jota-orchestrator (Alternative)
 
 | Componente | Archivo |
 |---|---|
-| Endpoint `/api/quick` (voz) | `src/api/quick.py` |
-| Endpoint WebSocket chat | `src/api/chat/websocket.py` |
-| Endpoint REST gestión | `src/api/rest.py` |
+| Endpoint `/api/quick` | `src/api/quick.py` |
 | Tool calling | `src/core/controller/input.py` |
-
-### jota-db
-
-| Componente | Archivo |
-|---|---|
-| Todos los modelos | `src/core/models.py` |
-| Auth endpoints | `src/api/routers/auth.py` |
-| Config endpoints (`/config/me`) | `src/api/routers/config.py` |
-| Chat (conversaciones, mensajes) | `src/api/routers/chat.py` |
-| Seguridad Bearer | `src/api/security.py` |
 
 ### jota-transcriber
 
 | Componente | Archivo |
 |---|---|
-| Sesión WebSocket (protocolo) | `src/server/StreamingSession.h` |
+| Sesión WebSocket | `src/server/StreamingSession.h` |
 | Whisper engine | `src/whisper/StreamingWhisperEngine.cpp` |
 | Auth manager | `src/server/AuthManager.cpp` |
-| Race condition (issue #27) | `src/server/StreamingSession.h:380-416, 471-556` |
+
+### jota-speaker
+
+| Componente | Archivo |
+|---|---|
+| WebSocket TTS | `src/main.py` (FastAPI app) |
+| Wyoming server | `src/wyoming/` |
+| Kokoro engine wrapper | `src/tts/kokoro_engine.py` |
+
+### jota-db (Deprecated)
+
+| Componente | Archivo |
+|---|---|
+| Routers `/internal/` y `/admin/` | `src/api/routers/admin/` |
+| Modelos | `src/core/models.py` |
+| Bearer security | `src/api/security.py` |
+
+---
+
+## 10. Legacy / Deprecated
+
+### Por qué `jota-orchestrator` y `jota-inference` están en modo Alternative
+
+Estos dos servicios formaban el camino LLM original de Jota. Recientemente hemos adoptado **OpenClaw**, un orquestador open source más completo y con un ecosistema de plugins más amplio. La combinación OpenClaw + `llama.cpp` cubre los mismos casos de uso (LLM local, tools, memoria) con menos código propio que mantener.
+
+`jota-orchestrator` y `jota-inference` siguen siendo **útiles** para setups que necesitan control total sobre la inferencia y no quieren depender de un proyecto externo. Ambos están congelados en su estado funcional actual y reciben parches solo para issues críticas.
+
+**Recomendación:** nuevos deployments deberían usar la combinación OpenClaw + `llama.cpp` (rutas Maintained). Para setups existentes, no es necesario migrar inmediatamente — el gateway sigue siendo compatible con `jota-orchestrator` vía `x-client-key`/`x-client-id`.
+
+### Por qué `jota-db` está Deprecated
+
+A partir de `jota-gateway` v1.9.0, el gateway mantiene su propia base SQLite local para identidad, configuración de clientes y admin API. La dependencia de `jota-db` para esas funciones es historia.
+
+`jota-db` se mantiene por dos razones:
+1. **Auth externa opcional.** `jota-transcriber` y `jota-speaker` aún pueden usarlo como backend de validación de tokens (`AUTH_API_URL`).
+2. **Setups centralizados.** Algunos deployments prefieren un único servicio de auth para todos los microservicios.
+
+La dirección es eliminar la dependencia por defecto en transcriber/speaker (issue abierta en `jota-gateway`).
 
 ---
 

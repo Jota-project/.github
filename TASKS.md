@@ -1,46 +1,58 @@
 # Jota — Issues pendientes
 
-> Actualizado: 2026-04-05. Ver arquitectura completa en `ARCHITECTURE.md`.
+> Actualizado: 2026-07-01. Ver arquitectura completa en [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
 ## Estado del sistema
 
-El sistema está funcionalmente completo en su arquitectura BFF:
+El sistema está alineado con la nueva arquitectura modular:
 
-- **jota-gateway** — BFF con WebSocket + REST API. ClientConfig propagada a todos los servicios.
-- **jota-db** — Fuente de verdad. ClientConfig implementada y autoasignada por cliente.
-- **jota-orchestrator** — `system_prompt_extra`, UUID real como `client_id`, memoria funcional.
-- **jota-transcriber** — Auth por API, parciales en tiempo real, manejo de fallos.
-- **jota-speaker** — Auth contra jota-db, TTS streaming.
+- **jota-gateway** — BFF con SQLite local para identidad/clientes/config. Cuatro superficies: WS, Admin REST, OpenAI-compat, Health.
+- **jota-transcriber** — Whisper streaming C++17. Auth estática por defecto.
+- **jota-speaker** — Kokoro TTS + Wyoming protocol para Home Assistant.
+- **OpenClaw** — Orquestador LLM externo (camino Maintained).
+- **jota-orchestrator + jota-inference** — Camino Alternative 100% local; menos desarrollo futuro.
+- **jota-db** — Deprecated como fuente de identidad; mantenido como auth externa opcional.
 
 ---
 
-## Issues abiertas
+## Issues activas
 
-### jota-gateway — #8 — Crear suite de tests y CI
+### jota-gateway
 
-La única issue de trabajo real. Abarca:
+#### #52 — `/v1/*` auth model — security/compatibility conflict
 
-- Tests unitarios para `DbClient`, `OrchestratorClient`, `TranscriberClient`, `TTSClient`
-- Tests de integración para los endpoints REST (`/api/config`, `/api/conversations`, `/api/models`, `/api/health`)
-- Tests del WebSocket BFF (`/ws/stream`) con mocks de los servicios internos
-- Pipeline CI en GitHub Actions (lint + test en cada PR)
+Endpoints OpenAI-compat expuestos externamente sin auth, requerido por Home Assistant. Decidir entre LAN-only (nginx) o API key obligatoria. Documentar la decisión final en `ARCHITECTURE.md`.
 
-### jota-orchestrator — #15 — Eliminar `GET /models`
+#### #50 — E2E test suite with Docker Compose
 
-`GET /models` en el orchestrator es un proxy redundante a jota-db. Los clientes ahora usan `GET /api/models` del gateway. Limpieza técnica, no bloqueante.
+Suite E2E contra microservicios reales en Docker. Útil para detectar regresiones de contratos entre gateway ↔ transcriber/speaker.
 
-Verificar que ningún cliente externo llame al orchestrator directamente antes de eliminar.
+#### #49 — `DELETE /api/conversations/{id}` — archive endpoint
 
-### jota-db — #12 — Revisar y cerrar
+Pendiente de implementar.
 
-`ClientConfig` ya está implementada (#11). Revisar si queda algo pendiente en esta issue o cerrarla.
+#### #48 — Cachear `get_verified_client()` para evitar round-trip a SQLite por request
 
-### jota-transcriber — #27 — Race condition `flushLoop`/`handleEnd`
+Pendiente. TTL propuesto: 60 s.
 
-`handleEnd()` no establece `flush_running_ = false` antes de procesar el final. El `flushLoop` puede ejecutar un ciclo más y emitir un duplicado `is_final=true`.
+#### (nueva) — Deprecar jota-db como auth backend en transcriber/speaker
 
-Fix sugerido: `flush_running_ = false` + `flush_thread_.join()` al inicio de `handleEnd()`.
+Migrar transcriber y speaker a `AUTH_TOKEN` estático per-service por defecto. `AUTH_API_URL` queda como opción para setups que aún quieran centralizar auth.
 
-Ver análisis en `src/server/StreamingSession.h:380-416, 471-556`.
+### jota-transcriber
+
+#### #27 — Race condition `flushLoop`/`handleEnd` → duplicados `is_final`
+
+`handleEnd()` no establece `flush_running_ = false` antes de procesar el final. Fix sugerido: `flush_running_ = false` + `flush_thread_.join()` al inicio de `handleEnd()`. Ver análisis en `src/server/StreamingSession.h:380-416, 471-556`.
+
+---
+
+## Changelog reciente
+
+- **#67 (jota-gateway)** — Reemplazar jota-db con SQLite local.
+- **#66 (jota-gateway)** — API redesign: typed WS protocol, admin routes, health endpoints.
+- **#64 (jota-gateway)** — OpenClaw multiplexed concurrent sessions + agent-initiated push delivery.
+- **#51 (jota-gateway)** — Eliminar `GET /models` redundante.
+- **#18 (jota-orchestrator)** — `QuickRequest` acepta `system_prompt_extra`.
