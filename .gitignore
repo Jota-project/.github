@@ -1,0 +1,3 @@
+# Build / site output. specs/ is intentionally tracked.
+docs/_site
+/docs/site
