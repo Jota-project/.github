@@ -41,6 +41,8 @@ Pendiente. TTL propuesto: 60 s.
 
 Migrar transcriber y speaker a `AUTH_TOKEN` estático per-service por defecto. `AUTH_API_URL` queda como opción para setups que aún quieran centralizar auth.
 
+Issue abierta: https://github.com/Jota-project/jota-gateway/issues/78
+
 ### jota-transcriber
 
 #### #27 — Race condition `flushLoop`/`handleEnd` → duplicados `is_final`
