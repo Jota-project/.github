@@ -1,4 +1,5 @@
 # Jota — Distributed Voice AI Assistant
+<img width="1200" height="630" alt="og-image-en" src="https://github.com/user-attachments/assets/bc304728-6f45-460c-a480-06d3a312e600" />
 
 > A modular, privacy-first voice assistant built for local execution. One gateway, six microservices, zero cloud dependency.
 
