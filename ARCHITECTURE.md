@@ -1,6 +1,6 @@
 # Jota — System architecture
 
-> Last reviewed: 2026-10-26, against jota-gateway v1.21.0, jota-transcriber v1.4.2, jota-speaker v1.1.4 and OpenClaw 2026.10.5.
+> Last reviewed: 2026-10-26, against jota-gateway v1.21.0, jota-transcriber v1.4.2, jota-speaker v1.1.6 and OpenClaw 2026.10.5.
 >
 > This page is a map. Wire protocols and configuration live in each repo, which is the source of truth; follow the links instead of copying details here.
 
