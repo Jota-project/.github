@@ -93,13 +93,13 @@ Configured per-repo via `.github/workflows/release.yml` + `.releaserc.json`.
 
 ### Requirements per repo
 
-**Python repos** (jota-gateway, jota-speaker, jota-db, jota-orchestrator):
+**Python repos** (jota-gateway, jota-speaker, jota-voice, jota-wake-trainer):
 - `.releaserc.json` (no `@semantic-release/npm` — use pyproject.toml)
 - `CHANGELOG.md` (initially empty)
 - `.github/workflows/release.yml`
 - `APP_ID` + `APP_PRIVATE_KEY` secrets (GitHub App token)
 
-**C++ repos** (jota-transcriber, jota-inference):
+**C++ repos** (jota-transcriber):
 - Same structure but C++ build in CI
 
 ### Release workflow template
@@ -125,6 +125,7 @@ jobs:
           fetch-depth: 0
 
       - name: Generate Token from Jota-App
+        id: generate_token
         uses: tibdex/github-app-token@v2
         with:
           app_id: ${{ secrets.APP_ID }}
