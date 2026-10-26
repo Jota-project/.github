@@ -49,9 +49,9 @@ Legacy repos are archived: read-only, kept for reference. New setups should not 
 
 Want to build your own client? The gateway protocol is documented in [`jota-gateway/docs/client-protocol.md`](https://github.com/jota-project/jota-gateway/blob/main/docs/client-protocol.md). Audio goes up as PCM Float32 at 16 kHz and comes back as PCM16 at 24 kHz.
 
-## Cloud and Local
+## Where it runs
 
-Same pieces either way: **Jota Cloud** runs the gateway, speech and orchestrator on Jota's servers, while **Jota Local** runs all of them on a machine of yours, with the same client protocol.
+Jota is installed locally: the gateway, speech and orchestrator run on machines of yours. What leaves your home depends only on the external providers you choose, such as ElevenLabs for speech, a cloud language model for OpenClaw, or a tunnel or proxy to reach the gateway from outside. Their terms, and what they do with your data, are between you and them.
 
 ## Key docs
 

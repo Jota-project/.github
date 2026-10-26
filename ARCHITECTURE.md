@@ -1,6 +1,6 @@
 # Jota — System architecture
 
-> Last reviewed: 2026-10-26, against jota-gateway v1.21.0, jota-transcriber v1.4.2, jota-speaker v1.1.3 and OpenClaw 2026.10.5.
+> Last reviewed: 2026-10-26, against jota-gateway v1.21.0, jota-transcriber v1.4.2, jota-speaker v1.1.4 and OpenClaw 2026.10.5.
 >
 > This page is a map. Wire protocols and configuration live in each repo, which is the source of truth; follow the links instead of copying details here.
 
@@ -36,7 +36,7 @@ Jota-Screen (TV) and the iPhone app are closed source. They use the same client 
 
 ## A voice turn
 
-1. The client detects the wake word on the device and opens a WebSocket session with the gateway, sending its `client_key`.
+1. The client opens a WebSocket session with the gateway, sending its `client_key`. jota-voice opens it when it starts and keeps it open (`persistent_session`, `true` by default); a turn begins when it detects the wake word on the device.
 2. The gateway validates the key against its own database and loads that client's config (STT language, TTS voice and speed, barge-in, default and allowed agents, output modes). Revoked or deactivated clients are disconnected within about 10 s.
 3. Mic audio (PCM Float32, 16 kHz) is forwarded to the STT provider. Partial transcriptions stream back to the client. The final transcription goes back to the client, which confirms it with a `send` message.
 4. The gateway sends the text to the client's agent in OpenClaw.
@@ -47,20 +47,23 @@ The STT and TTS providers (`jota` or `elevenlabs`) are chosen by whoever runs th
 
 ## Deployments
 
-- **Jota Cloud**: gateway, speech and orchestrator run on Jota's servers. Only the client runs at home.
-- **Jota Local**: everything runs on a machine of yours. Audio stays on your network if you use jota-transcriber and jota-speaker; the language model used by OpenClaw and any tunnel you use to reach the gateway from outside are separate choices.
+Jota is installed and runs locally: the gateway, speech services and OpenClaw run on machines of yours.
+
+- What leaves your network depends only on the external providers you choose: ElevenLabs for STT or TTS, a cloud language model for OpenClaw, and any tunnel or proxy you use to reach the gateway from outside. Their terms, and what they do with your data, are your responsibility.
+- Audio stays on your network if you use jota-transcriber and jota-speaker.
 
 ## Home Assistant
 
 - jota-speaker as a TTS engine, through Wyoming (default port 20424).
 - jota-gateway as a conversation agent, through its OpenAI-compatible API (`/v1/chat/completions`).
+- OpenClaw controls Home Assistant through an MCP server.
 
 ## Legacy repositories (archived)
 
 These repos are no longer part of the architecture. They are archived (read-only) and kept for reference only.
 
-| Repo | Replaced by |
-|---|---|
-| jota-orchestrator · Legacy (archived) | OpenClaw |
-| jota-inference · Legacy (archived) | OpenClaw, with the language model it is configured to use |
-| jota-db · Legacy (archived) | jota-gateway's own database (since v1.9.0). jota-transcriber and jota-speaker can still use it as an auth backend; new setups don't need it. |
+| Repo | Status | Replaced by |
+|---|---|---|
+| jota-orchestrator | Legacy (archived) | OpenClaw |
+| jota-inference | Legacy (archived) | OpenClaw, with the language model it is configured to use |
+| jota-db | Legacy (archived) | jota-gateway's own database (since v1.9.0). jota-transcriber and jota-speaker can still use it as an auth backend; new setups don't need it. |
