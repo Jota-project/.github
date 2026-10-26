@@ -1,223 +1,66 @@
-# Jota — Arquitectura del Sistema
+# Jota — System architecture
 
-> Última actualización: 2026-04-05
+> Last reviewed: 2026-10-26, against jota-gateway v1.21.0, jota-transcriber v1.4.2, jota-speaker v1.1.3 and OpenClaw 2026.10.5.
+>
+> This page is a map. Wire protocols and configuration live in each repo, which is the source of truth; follow the links instead of copying details here.
 
----
+## Overview
 
-## 1. Visión General
-
-Jota es un asistente de voz distribuido. Un cliente físico (ESP32, app, web) habla con un único punto de entrada (gateway), que orquesta varios microservicios especializados.
-
-### Mapa de servicios
+Jota separates the voice from the brain. Clients capture and play audio. **Jota-Gateway** (repo `jota-gateway`) is the only thing they connect to. Behind it, speech-to-text, an orchestrator and text-to-speech do the work.
 
 ```
-Physical Client (ESP32 / Web / App)
-        │  WebSocket  ws://gateway:8004/ws/stream
-        │  REST HTTP  http://gateway:8004/api/*
-        │  Handshake: { client_key, input_mode, output_mode, ... }
-        ▼
-  [jota-gateway]  — Python/FastAPI — Puerto 8004
-  BFF completo. Un JotaBridge por sesión de voz.
-        │
-        ├──► [jota-orchestrator]  — Python/FastAPI — Puerto 8000
-        │     HTTP POST /api/quick (NDJSON streaming)
-        │     Headers: x-client-key, x-client-id
-        │           │
-        │           ├──► [jota-inference]  — C++/llama.cpp
-        │           │     WebSocket (protocolo JSON propio)
-        │           │
-        │           └──► [jota-db]  — Python/FastAPI/SQLite — Puerto 8001
-        │                 HTTP REST
-        │
-        ├──► [jota-transcriber]  — C++/whisper.cpp — Puerto 9000
-        │     WebSocket (PCM Float32 in, JSON transcriptions out)
-        │     Handshake: { type: "config", token: <client_key>, language, vad_thold }
-        │
-        └──► [jota-speaker]  — Python/FastAPI/Kokoro — Puerto 8005
-              WebSocket (JSON tokens in, PCM16 audio out)
-              Handshake: { type: "auth", token: <tts_token>, voice, speed }
+ Client (Jota-Screen · jota-voice · iPhone app)
+    │  ws://<gateway>/ws/stream
+    │  handshake with a per-client client_key
+    ▼
+ jota-gateway  (Python/FastAPI, :8004)
+    │  identity, per-client config and agent routing in its own SQLite database
+    │
+    ├─► STT: jota-transcriber (WebSocket /api/stt)  ·  or ElevenLabs Scribe
+    ├─► Orchestrator: OpenClaw (WebSocket, default 127.0.0.1:18789)
+    └─► TTS: jota-speaker (WebSocket /ws, :8005)     ·  or ElevenLabs
 ```
 
----
+## Components
 
-## 2. Gateway — API pública
-
-El gateway es el único punto de contacto con el exterior.
-
-### WebSocket
-
-| Endpoint | Descripción |
-|---|---|
-| `ws://gateway:8004/ws/stream` | Sesión bidireccional de voz (JotaBridge) |
-
-### REST
-
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `GET` | `/api/health` | Estado de todos los microservicios (público) |
-| `GET` | `/api/models` | Modelos disponibles |
-| `GET` | `/api/config` | Configuración del cliente |
-| `PUT` | `/api/config` | Actualizar configuración (patch parcial) |
-| `POST` | `/api/config/reset` | Restaurar configuración a defaults |
-| `GET` | `/api/conversations` | Historial de conversaciones |
-| `GET` | `/api/conversations/{id}/messages` | Mensajes de una conversación |
-| `DELETE` | `/api/conversations/{id}` | Archivar conversación |
-
-Todos los endpoints REST (excepto `/health`) requieren `X-API-Key` en el header, que se resuelve contra jota-db.
-
----
-
-## 3. Flujo de Identidad
-
-```
-Cliente conecta → ws://gateway:8004/ws/stream
-  Handshake: { "client_key": "abc123", ... }
-
-  Gateway → GET /auth/session en jota-db
-    { client: { id: "uuid-real", ... }, config: { stt_language: "es", tts_voice: "af_heart", ... } }
-
-  Gateway → POST /api/quick en orchestrator
-    headers: x-client-key: "abc123", x-client-id: "uuid-real"
-    body: { text: "...", model_id, system_prompt_extra }
-
-  Gateway → Transcriber WS
-    Handshake: { type: "config", token: "abc123", language, vad_thold }
-
-  Gateway → Speaker WS
-    Handshake: { type: "auth", token: <TTS_TOKEN>, voice, speed }
-```
-
-Los valores de `language`, `vad_thold`, `voice`, `speed`, `model_id` y `system_prompt_extra` se leen de `ClientConfig` — no son globales.
-
----
-
-## 4. ClientConfig
-
-Almacenada en jota-db. Se carga en el handshake de voz y en cada request REST.
-
-| Campo | Default | Usado en |
-|---|---|---|
-| `stt_language` | `"es"` | Handshake del transcriber |
-| `stt_vad_thold` | `0.0` | Handshake del transcriber |
-| `tts_voice` | `"af_heart"` | Handshake del speaker |
-| `tts_speed` | `1.0` | Handshake del speaker |
-| `preferred_model_id` | `null` | Payload al orchestrator |
-| `system_prompt_extra` | `null` | Payload al orchestrator |
-| `barge_in_enabled` | `true` | Bridge — cancelación de turno |
-| `barge_in_min_chars` | `5` | Bridge — umbral de interrupción |
-| `conversation_memory_limit` | `20` | Orchestrator — ventana de memoria |
-
-Endpoints en jota-db: `GET/PUT /config/me`, `POST /config/me/reset`.
-
----
-
-## 5. Protocolos de los microservicios
-
-### jota-transcriber
-
-**Handshake (gateway → transcriber):**
-```json
-{ "type": "config", "language": "es", "token": "<client_key>", "vad_thold": 0.0 }
-```
-
-**Respuesta `ready`:**
-```json
-{ "type": "ready", "protocol_version": 1, "session_id": "session-...", "config": { ... } }
-```
-
-**Mensajes del servidor:**
-| Tipo | Cuándo |
-|---|---|
-| `ready` | Tras config válida |
-| `transcription` | Parciales + final (`is_final: true`) |
-| `warning` | Buffer ≥ 20 s (`code: "buffer_full"`) |
-| `error` | Auth fallida, config inválida, etc. |
-
-Fin de sesión: `{"type": "end"}` — dispara transcripción final y cierra.
-
-**Auth del transcriber:**
-- Dev: `AUTH_TOKEN=<token>`
-- Prod: `AUTH_API_URL=http://jota-db:8001/auth` + `AUTH_API_SECRET`. Llama a `GET /auth/client`, caché de 300 s.
-
-### jota-speaker
-
-Auth vía `POST /auth/validate` en jota-db con `TTS_TOKEN`.
-
-### jota-orchestrator
-
-Acepta `POST /api/quick` con NDJSON streaming. Lee `x-client-key` y `x-client-id` del header para identificar al cliente y crear conversaciones con FK válida en jota-db.
-
----
-
-## 6. Caché en el gateway
-
-`src/core/cache.py` — `make_cache(maxsize, ttl)` → `(TTLCache, asyncio.Lock)`
-
-| Recurso | TTL | Maxsize |
-|---|---|---|
-| `get_session()` (auth REST) | 60 s | 500 |
-| `get_models()` | 300 s | 1 |
-
----
-
-## 7. Issues abiertas
-
-| Repo | Issue | Descripción | Prioridad |
+| Component | Role | Tech | Docs |
 |---|---|---|---|
-| `jota-gateway` | #8 | Crear suite de tests y CI | P2 |
-| `jota-orchestrator` | #15 | Eliminar `GET /models` (proxy redundante) | P3 |
-| `jota-db` | #12 | Revisar/cerrar — ClientConfig ya implementada | P3 |
-| `jota-transcriber` | #27 | Race condition `flushLoop`/`handleEnd` → duplicados `is_final` | P2 |
+| jota-gateway (Jota-Gateway) | Single entry point. Client keys, sessions, agent routing, coordination of STT, orchestrator and TTS. Admin API and an OpenAI-compatible API for Home Assistant. | Python, FastAPI | [README](https://github.com/jota-project/jota-gateway#readme), [client protocol](https://github.com/jota-project/jota-gateway/blob/main/docs/client-protocol.md), [OpenClaw protocol](https://github.com/jota-project/jota-gateway/blob/main/docs/openclaw-protocol.md) |
+| jota-transcriber | Streaming speech-to-text with partial and final transcriptions. Also `POST /v1/audio/transcriptions`. | C++, whisper.cpp, CUDA | [README](https://github.com/jota-project/jota-transcriber#readme), [API guide](https://github.com/jota-project/jota-transcriber/blob/main/clients/API_GUIDE.md) |
+| jota-speaker | Streaming text-to-speech, sentence by sentence. Also OpenAI-compatible `POST /v1/audio/speech` and a Wyoming server for Home Assistant. | Python, Kokoro ONNX | [README](https://github.com/jota-project/jota-speaker#readme) |
+| OpenClaw | Orchestrator: reasoning, memory, agents, tools, scheduled tasks. External project. | Node.js, TypeScript | [openclaw/openclaw](https://github.com/openclaw/openclaw) |
+| jota-voice | Open-source voice client for macOS and Android (Termux). On-device wake word with openWakeWord. | Python | [README](https://github.com/jota-project/jota-voice#readme) |
+| jota-wake-trainer | Trains custom wake-word models for openWakeWord. | Python | [README](https://github.com/jota-project/jota-wake-trainer#readme) |
 
----
+Jota-Screen (TV) and the iPhone app are closed source. They use the same client protocol as jota-voice.
 
-## 8. Estructura de ficheros clave
+## A voice turn
 
-### jota-gateway
+1. The client detects the wake word on the device and opens a WebSocket session with the gateway, sending its `client_key`.
+2. The gateway validates the key against its own database and loads that client's config (STT language, TTS voice and speed, barge-in, default and allowed agents, output modes). Revoked or deactivated clients are disconnected within about 10 s.
+3. Mic audio (PCM Float32, 16 kHz) is forwarded to the STT provider. Partial transcriptions stream back to the client. The final transcription goes back to the client, which confirms it with a `send` message.
+4. The gateway sends the text to the client's agent in OpenClaw.
+5. The reply streams back as text tokens. The gateway forwards them to the client and to the TTS provider at the same time, and sends the audio (PCM16, 24 kHz, binary frames with a turn header) on the same WebSocket.
+6. Barge-in, cancellation and agent-initiated (push) turns are described in the [client protocol](https://github.com/jota-project/jota-gateway/blob/main/docs/client-protocol.md).
 
-| Componente | Archivo |
+The STT and TTS providers (`jota` or `elevenlabs`) are chosen by whoever runs the gateway, for all its clients, via `STT_PROVIDER` / `TTS_PROVIDER` or `PUT /admin/speech`. Clients see the same messages and audio formats either way.
+
+## Deployments
+
+- **Jota Cloud**: gateway, speech and orchestrator run on Jota's servers. Only the client runs at home.
+- **Jota Local**: everything runs on a machine of yours. Audio stays on your network if you use jota-transcriber and jota-speaker; the language model used by OpenClaw and any tunnel you use to reach the gateway from outside are separate choices.
+
+## Home Assistant
+
+- jota-speaker as a TTS engine, through Wyoming (default port 20424).
+- jota-gateway as a conversation agent, through its OpenAI-compatible API (`/v1/chat/completions`).
+
+## Legacy repositories (archived)
+
+These repos are no longer part of the architecture. They are archived (read-only) and kept for reference only.
+
+| Repo | Replaced by |
 |---|---|
-| WebSocket BFF + JotaBridge | `src/services/bridge.py` |
-| WS endpoint + handshake | `src/api/routes.py` |
-| Auth dependency REST | `src/api/deps.py` |
-| REST: config | `src/api/config_routes.py` |
-| REST: conversaciones | `src/api/conversation_routes.py` |
-| REST: modelos | `src/api/models_routes.py` |
-| REST: health | `src/api/health_routes.py` |
-| Cliente jota-db | `src/services/db_client.py` |
-| Cliente orchestrator | `src/services/orchestrator_client.py` |
-| Cliente transcriber | `src/services/transcriber_client.py` |
-| Cliente TTS | `src/services/tts_client.py` |
-| Caché TTL | `src/core/cache.py` |
-
-### jota-orchestrator
-
-| Componente | Archivo |
-|---|---|
-| Endpoint `/api/quick` (voz) | `src/api/quick.py` |
-| Endpoint WebSocket chat | `src/api/chat/websocket.py` |
-| Endpoint REST gestión | `src/api/rest.py` |
-| Tool calling | `src/core/controller/input.py` |
-
-### jota-db
-
-| Componente | Archivo |
-|---|---|
-| Todos los modelos | `src/core/models.py` |
-| Auth endpoints | `src/api/routers/auth.py` |
-| Config endpoints (`/config/me`) | `src/api/routers/config.py` |
-| Chat (conversaciones, mensajes) | `src/api/routers/chat.py` |
-| Seguridad Bearer | `src/api/security.py` |
-
-### jota-transcriber
-
-| Componente | Archivo |
-|---|---|
-| Sesión WebSocket (protocolo) | `src/server/StreamingSession.h` |
-| Whisper engine | `src/whisper/StreamingWhisperEngine.cpp` |
-| Auth manager | `src/server/AuthManager.cpp` |
-| Race condition (issue #27) | `src/server/StreamingSession.h:380-416, 471-556` |
-
----
-
-*Documento vivo — actualizar al cerrar issues o cambiar contratos de API.*
+| jota-orchestrator · Legacy (archived) | OpenClaw |
+| jota-inference · Legacy (archived) | OpenClaw, with the language model it is configured to use |
+| jota-db · Legacy (archived) | jota-gateway's own database (since v1.9.0). jota-transcriber and jota-speaker can still use it as an auth backend; new setups don't need it. |
